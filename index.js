@@ -36,11 +36,11 @@ const httpServer = http.createServer((req, res) => {
     const filePath = path.join(__dirname, 'index.html');
     fs.readFile(filePath, 'utf8', (err, content) => {
       if (err) {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end('Hello world!');
         return;
       }
-      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(content);
     });
     return;
@@ -50,10 +50,10 @@ const httpServer = http.createServer((req, res) => {
     const trojanURL = ''
     const subscription = [vlessURL, trojanURL].filter(Boolean).join('\r\n');
     const base64Content = Buffer.from(subscription).toString('base64');
-    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(base64Content + '\r\n');
   } else {
-    res.writeHead(404, { 'Content-Type': 'text/html' });
+    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end('Not Found\n');
   }
 });
