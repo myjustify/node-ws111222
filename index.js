@@ -10,28 +10,54 @@ const { exec, execSync } = require('child_process');
 const { WebSocket, createWebSocketStream } = require('ws');
 
 const UUID = process.env.UUID || 'da68cfd4-70eb-4664-bf6a-db0355382ab8';
+const NEZHA_SERVER = process.env.NEZHA_SERVER || '';
+const NEZHA_PORT = process.env.NEZHA_PORT || '';
+const NEZHA_KEY = process.env.NEZHA_KEY || '';
 const DOMAIN = process.env.DOMAIN || '1234.abc.com';
 const AUTO_ACCESS = process.env.AUTO_ACCESS || true;
 const WSPATH = process.env.WSPATH || UUID.slice(0, 8);
-const SUB_PATH = process.env.SUB_PATH || 'sub';   // 这个路径现在只是摆设，实际已不靠路径判断
+const SUB_PATH = process.env.SUB_PATH || 'sub';
 const NAME = process.env.NAME || 'Hug';
 const PORT = process.env.PORT || 7860;
 
-let ISP = 'Unknown';
+let ISP = '';
 const GetISP = async () => {
   try {
     const res = await axios.get('https://speed.cloudflare.com/meta');
-    ISP = `${res.data.country}-${res.data.asOrganization}`.replace(/ /g, '_');
-  } catch (e) { ISP = 'Unknown'; }
+    const data = res.data;
+    ISP = `${data.country}-${data.asOrganization}`.replace(/ /g, '_');
+  } catch (e) {
+    ISP = 'Unknown';
+  }
 };
 GetISP();
 
-// ==================== Clash Meta 专用配置 ====================
-const clashMetaYaml = `mixed-port: 7890
+const httpServer = http.createServer((req, res) => {
+  if (req.url === '/') {
+    const filePath = path.join(__dirname, 'index.html');
+    fs.readFile(filePath, 'utf8', (err, content) => {
+      if (err) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end('Hello world!');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(content);
+    });
+    return;
+  } 
+  
+  // ==================== 关键修改：只改这里 ====================
+  else if (req.url === `/${SUB_PATH}` || req.url === `/${SUB_PATH}/`) {
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
+    const isClashMeta = ua.includes('clash') || ua.includes('meta') || ua.includes('stash') || ua.includes('sing-box');
+
+    if (isClashMeta) {
+      // Clash Meta 专用配置
+      const clashConfig = `mixed-port: 7890
 allow-lan: false
 mode: rule
 log-level: silent
-external-controller: 127.0.0.1:9090
 ipv6: true
 
 proxies:
@@ -43,9 +69,8 @@ proxies:
     alpn: [h3]
     sni: www.microsoft.com
     skip-cert-verify: true
-    fast-open: true
 
-  - name: "${NAME}-${ISP}-VLESS-Vision-Reality"
+  - name: "${NAME}-${ISP}-VLESS-Reality-Vision"
     type: vless
     server: ${DOMAIN}
     port: 443
@@ -55,9 +80,8 @@ proxies:
     servername: www.yahoo.com
     reality-opts:
       public-key: HpZC3mD0d6w1X7T1f1v7Z9Y8X5b9G9n1U5m7K8q1P4r
-      short-id: 8f8f8f8f
+      short-id: a1b2c3d4
     client-fingerprint: chrome
-    network: tcp
 
   - name: "${NAME}-${ISP}-TUIC-v5"
     type: tuic
@@ -72,96 +96,280 @@ proxies:
     congestion-control: bbr
 
 proxy-groups:
-  - name: 🚀 节点选择
+  - name: 自动选择
     type: fallback
     proxies:
       - ${NAME}-${ISP}-Hysteria2
-      - ${NAME}-${ISP}-VLESS-Vision-Reality
+      - ${NAME}-${ISP}-VLESS-Reality-Vision
       - ${NAME}-${ISP}-TUIC-v5
-    url: https://cp.cloudflare.com/generate_204
+    url: http://cp.cloudflare.com/generate_204
     interval: 300
 
 rules:
   - GEOIP,CN,DIRECT
-  - MATCH,🚀 节点选择`;
+  - MATCH,自动选择`;
 
-// ==================== 传统 Base64 vless 订阅（给 v2rayN 等） ====================
-const vlessURL = `vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=ws&host=${DOMAIN}&path=%2F${WSPATH}#${NAME}-${ISP}`;
-const base64Sub = Buffer.from(vlessURL + '\n').toString('base64');
-
-// ==================== HTTP 服务（关键判断在这里） ====================
-const httpServer = http.createServer((req, res) => {
-  const userAgent = (req.headers['user-agent'] || '').toLowerCase();
-
-  // 主页
-  if (req.url === '/' || req.url === '/index.html') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end('<h1>节点运行正常</h1><p>订阅链接（任意路径都行）：<br>' + 
-            `https://${DOMAIN}:${PORT}/anything</p>`);
+      res.writeHead(200, {
+        'Content-Type': 'text/yaml; charset=utf-8',
+        'Subscription-Userinfo': 'upload=0; download=0; total=0; expire=0',
+        'Profile-Update-Interval': '24'
+      });
+      res.end(clashConfig);
+    } else {
+      // 原来逻辑：返回 base64 vless
+      const vlessURL = `vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=ws&host=${DOMAIN}&path=%2F${WSPATH}#${NAME}-${ISP}`;
+      const subscription = vlessURL + '\r\n';
+      const base64Content = Buffer.from(subscription).toString('base64');
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(base64Content);
+    }
     return;
   }
+  // ==========================================================
 
-  // 【核心判断】只要 UA 包含 clash 就返回 Clash Meta 配置
-  if (userAgent.includes('clash') || userAgent.includes('meta') || userAgent.includes('stash') || userAgent.includes('sing-box')) {
-    res.writeHead(200, {
-      'Content-Type': 'text/yaml; charset=utf-8',
-      'Subscription-Userinfo': 'upload=0; download=0; total=0; expire=0',
-      'Profile-Update-Interval': '24'
-    });
-    res.end(clashMetaYaml);
-  } 
-  // 其他所有请求（包括 v2rayN、NekoBox、Quantumult X、旧版 Clash for Windows 等）返回 base64
   else {
-    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(base64Sub);
+    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('Not Found\n');
   }
 });
 
-// ==================== 保留你原来的 WS 桥接（兼容旧 vless-ws 客户端） ====================
+// ==================== 以下全部原封不动 ====================
+
 const wss = new WebSocket.Server({ server: httpServer });
 const uuid = UUID.replace(/-/g, "");
+const DNS_SERVERS = ['8.8.4.4', '1.1.1.1'];
 
-// 你原来的 handleVlessConnection 和 handleTrojanConnection 函数直接粘贴在这里（保持 100% 不动）
+function resolveHost(host) {
+  return new Promise((resolve, reject) => {
+    if (/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(host)) {
+      resolve(host);
+      return;
+    }
+    let attempts = 0;
+    function tryNextDNS() {
+      if (attempts >= DNS_SERVERS.length) {
+        reject(new Error(`Failed to resolve ${host} with all DNS servers`));
+        return;
+      }
+      const dnsServer = DNS_SERVERS[attempts];
+      attempts++;
+      const dnsQuery = `https://dns.google/resolve?name=${encodeURIComponent(host)}&type=A`;
+      axios.get(dnsQuery, {
+        timeout: 5000,
+        headers: { 'Accept': 'application/dns-json' }
+      })
+      .then(response => {
+        const data = response.data;
+        if (data.Status === 0 && data.Answer && data.Answer.length > 0) {
+          const ip = data.Answer.find(record => record.type === 1);
+          if (ip) { resolve(ip.data); return; }
+        }
+        tryNextDNS();
+      })
+      .catch(() => tryNextDNS());
+    }
+    tryNextDNS();
+  });
+}
+
 function handleVlessConnection(ws, msg) {
-  // ← 把你原来的整个 handleVlessConnection 函数内容粘贴进来
-  // （为了篇幅这里省略，你直接复制原来的即可）
+  const [VERSION] = msg;
+  const id = msg.slice(1, 17);
+  if (!id.every((v, i) => v == parseInt(uuid.substr(i * 2, 2), 16))) return false;
+  let i = msg.slice(17, 18).readUInt8() + 19;
+  const port = msg.slice(i, i += 2).readUInt16BE(0);
+  const ATYP = msg.slice(i, i += 1).readUInt8();
+  const host = ATYP == 1 ? msg.slice(i, i += 4).join('.') :
+    (ATYP == 2 ? new TextDecoder().decode(msg.slice(i + 1, i += 1 + msg.slice(i, i + 1).readUInt8())) :
+    (ATYP == 3 ? msg.slice(i, i += 16).reduce((s, b, i, a) => (i % 2 ? s.concat(a.slice(i - 1, i + 1)) : s), []).map(b => b.readUInt16BE(0).toString(16)).join(':') : ''));
+  ws.send(new Uint8Array([VERSION, 0]));
+  const duplex = createWebSocketStream(ws);
+  resolveHost(host)
+    .then(resolvedIP => {
+      net.connect({ host: resolvedIP, port }, function() {
+        this.write(msg.slice(i));
+        duplex.on('error', () => {}).pipe(this).on('error', () => {}).pipe(duplex);
+      }).on('error', () => {});
+    })
+    .catch(() => {
+      net.connect({ host, port }, function() {
+        this.write(msg.slice(i));
+        duplex.on('error', () => {}).pipe(this).on('error', () => {}).pipe(duplex);
+      }).on('error', () => {});
+    });
+  return true;
+}
+
+function handleTrojanConnection(ws, msg) {
+  try {
+    if (msg.length < 58) return false;
+    const receivedPasswordHash = msg.slice(0, 56).toString();
+    const possiblePasswords = [UUID];
+    let matchedPassword = null;
+    for (const pwd of possiblePasswords) {
+      const hash = crypto.createHash('sha224').update(pwd).digest('hex');
+      if (hash === receivedPasswordHash) {
+        matchedPassword = pwd;
+        break;
+      }
+    }
+    if (!matchedPassword) return false;
+    let offset = 56;
+    if (msg[offset] === 0x0d && msg[offset + 1] === 0x0a) offset += 2;
+    const cmd = msg[offset];
+    if (cmd !== 0x01) return false;
+    offset += 1;
+    const atyp = msg[offset];
+    offset += 1;
+    let host, port;
+    if (atyp === 0x01) {
+      host = msg.slice(offset, offset + 4).join('.');
+      offset += 4;
+    } else if (atyp === 0x03) {
+      const hostLen = msg[offset];
+      offset += 1;
+      host = msg.slice(offset, offset + hostLen).toString();
+      offset += hostLen;
+    } else if (atyp === 0x04) {
+      host = msg.slice(offset, offset + 16).reduce((s, b, i, a) => 
+        (i % 2 ? s.concat(a.slice(i - 1, i + 1)) : s), [])
+        .map(b => b.readUInt16BE(0).toString(16)).join(':');
+      offset += 16;
+    } else return false;
+    port = msg.readUInt16BE(offset);
+    offset += 2;
+    if (offset < msg.length && msg[offset] === 0x0d && msg[offset + 1] === 0x0a) offset += 2;
+    const duplex = createWebSocketStream(ws);
+    resolveHost(host)
+      .then(resolvedIP => {
+        net.connect({ host: resolvedIP, port }, function() {
+          if (offset < msg.length) this.write(msg.slice(offset));
+          duplex.on('error', () => {}).pipe(this).on('error', () => {}).pipe(duplex);
+        }).on('error', () => {});
+      })
+      .catch(() => {
+        net.connect({ host, port }, function() {
+          if (offset < msg.length) this.write(msg.slice(offset));
+          duplex.on('error', () => {}).pipe(this).on('error', () => {}).pipe(duplex);
+        }).on('error', () => {});
+      });
+    return true;
+  } catch (error) {
+    return false;
+  }
 }
 
 wss.on('connection', (ws, req) => {
+  const url = req.url || '';
   ws.once('message', msg => {
     if (msg.length > 17 && msg[0] === 0) {
       const id = msg.slice(1, 17);
-      if (id.every((v, i) => v == parseInt(uuid.substr(i * 2, 2), 16))) {
-        handleVlessConnection(ws, msg);
+      const isVless = id.every((v, i) => v == parseInt(uuid.substr(i * 2, 2), 16));
+      if (isVless) {
+        if (!handleVlessConnection(ws, msg)) ws.close();
         return;
       }
     }
-    ws.close();
-  });
+    if (!handleTrojanConnection(ws, msg)) ws.close();
+  }).on('error', () => {});
 });
 
-// ==================== 哪吒、删除文件、保活（全部保留） ====================
-const getDownloadUrl = () => { /* 你原来的代码 */ };
-const downloadFile = async () => { /* 你原来的代码 */ };
-const runnz = async () => { /* 你原来的代码 */ };
+const getDownloadUrl = () => {
+  const arch = os.arch(); 
+  if (arch === 'arm' || arch === 'arm64' || arch === 'aarch64') {
+    return NEZHA_PORT ? 'https://arm64.ssss.nyc.mn/agent' : 'https://arm64.ssss.nyc.mn/v1';
+  } else {
+    return NEZHA_PORT ? 'https://amd64.ssss.nyc.mn/agent' : 'https://amd64.ssss.nyc.mn/v1';
+  }
+};
+
+const downloadFile = async () => {
+  if (!NEZHA_SERVER && !NEZHA_KEY) return;
+  try {
+    const url = getDownloadUrl();
+    const response = await axios({ method: 'get', url, responseType: 'stream' });
+    const writer = fs.createWriteStream('npm');
+    response.data.pipe(writer);
+    return new Promise((resolve, reject) => {
+      writer.on('finish', () => {
+        console.log('npm download successfully');
+        exec('chmod +x npm', err => { if (err) reject(err); else resolve(); });
+      });
+      writer.on('error', reject);
+    });
+  } catch (err) { throw err; }
+};
+
+const runnz = async () => {
+  try {
+    const status = execSync('ps aux | grep -v "grep" | grep "./[n]pm"', { encoding: 'utf-8' });
+    if (status.trim() !== '') { console.log('npm is already running, skip running...'); return; }
+  } catch (e) {}
+  await downloadFile();
+  let command = '';
+  let tlsPorts = ['443', '8443', '2096', '2087', '2083', '2053'];
+  if (NEZHA_SERVER && NEZHA_PORT && NEZHA_KEY) {
+    const NEZHA_TLS = tlsPorts.includes(NEZHA_PORT) ? '--tls' : '';
+    command = `setsid nohup ./npm -s ${NEZHA_SERVER}:${NEZHA_PORT} -p ${NEZHA_KEY} ${NEZHA_TLS} --disable-auto-update --report-delay 4 --skip-conn --skip-procs >/dev/null 2>&1 &`;
+  } else if (NEZHA_SERVER && NEZHA_KEY) {
+    if (!NEZHA_PORT) {
+      const port = NEZHA_SERVER.includes(':') ? NEZHA_SERVER.split(':').pop() : '';
+      const NZ_TLS = tlsPorts.includes(port) ? 'true' : 'false';
+      const configYaml = `client_secret: ${NEZHA_KEY}
+debug: false
+disable_auto_update: true
+disable_command_execute: false
+disable_force_update: true
+disable_nat: false
+disable_send_query: false
+gpu: false
+insecure_tls: true
+ip_report_period: 1800
+report_delay: 4
+server: ${NEZHA_SERVER}
+skip_connection_count: true
+skip_procs_count: true
+temperature: false
+tls: ${NZ_TLS}
+use_gitee_to_upgrade: false
+use_ipv6_country_code: false
+uuid: ${UUID}`;
+      fs.writeFileSync('config.yaml', configYaml);
+    }
+    command = `setsid nohup ./npm -c config.yaml >/dev/null 2>&1 &`;
+  } else {
+    console.log('NEZHA variable is empty, skip running');
+    return;
+  }
+  try {
+    exec(command, { shell: '/bin/bash' }, err => {
+      if (err) console.error('npm running error:', err);
+      else console.log('npm is running');
+    });
+  } catch (error) { console.error(`error: ${error}`); }   
+}; 
 
 async function addAccessTask() {
-  if (!AUTO_ACCESS || !DOMAIN) return;
+  if (!AUTO_ACCESS) return;
+  if (!DOMAIN) return;
+  const fullURL = `https://${DOMAIN}`;
   try {
-    await axios.post("https://oooo.serv00.net/add-url", { url: `https://${DOMAIN}` });
-  } catch {}
+    await axios.post("https://oooo.serv00.net/add-url", { url: fullURL }, {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    console.log('Automatic Access Task added successfully');
+  } catch (error) {}
 }
 
 const delFiles = () => {
   fs.unlink('npm', () => {});
-  fs.unlink('config.yaml', () => {});
+  fs.unlink('config.yaml', () => {}); 
 };
 
 httpServer.listen(PORT, () => {
   runnz();
-  setTimeout(delFiles, 180000);
+  setTimeout(() => { delFiles(); }, 180000);
   addAccessTask();
-  console.log(`服务器已启动 → http://0.0.0.0:${PORT}`);
-  console.log(`Clash Meta 自动识别成功（UA含clash）`);
-  console.log(`其他客户端自动获得 vless base64`);
+  console.log(`Server is running on port ${PORT}`);
+  console.log(`订阅地址（自动识别）：https://${DOMAIN}:${PORT}/${SUB_PATH}`);
 });
