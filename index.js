@@ -48,7 +48,7 @@ const httpServer = http.createServer((req, res) => {
     const vlessURL = `vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=ws&host=${DOMAIN}&path=%2F${WSPATH}#${NAME}-${ISP}`;
     // const trojanURL = `trojan://${UUID}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&fp=chrome&type=ws&host=${DOMAIN}&path=%2F${WSPATH}#${NAME}-${ISP}`;
     const trojanURL = ''
-    const subscription = vlessURL + '\r\n' + trojanURL;
+    const subscription = [vlessURL, trojanURL].filter(Boolean).join('\r\n');
     const base64Content = Buffer.from(subscription).toString('base64');
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(base64Content + '\r\n');
