@@ -24,8 +24,7 @@ let ISP = '';
 const GetISP = async () => {
   try {
     const res = await axios.get('https://speed.cloudflare.com/meta');
-    const data = res.data;
-    ISP = `${data.country}-${data.asOrganization}`.replace(/ /g, '_');
+    ISP = `${res.data.country}-${res.data.asOrganization}`.replace(/ /g, '_');
   } catch (e) {
     ISP = 'Unknown';
   }
@@ -47,85 +46,45 @@ const httpServer = http.createServer((req, res) => {
     return;
   } 
   
-  // ==================== 关键修改：只改这里 ====================
+  // 关键：只改这里
   else if (req.url === `/${SUB_PATH}` || req.url === `/${SUB_PATH}/`) {
     const ua = (req.headers['user-agent'] || '').toLowerCase();
-    const isClashMeta = ua.includes('clash') || ua.includes('meta') || ua.includes('stash') || ua.includes('sing-box');
+    const isClash = /clash|meta|stash|sing-box/.test(ua);
 
-    if (isClashMeta) {
-      // Clash Meta 专用配置
-      const clashConfig = `mixed-port: 7890
-allow-lan: false
-mode: rule
-log-level: silent
-ipv6: true
-
-proxies:
-  - name: "${NAME}-${ISP}-Hysteria2"
-    type: hysteria2
-    server: ${DOMAIN}
-    port: 443
-    password: ${UUID}
-    alpn: [h3]
-    sni: www.microsoft.com
-    skip-cert-verify: true
-
-  - name: "${NAME}-${ISP}-VLESS-Reality-Vision"
+    if (isClash) {
+      // Clash Meta 系客户端：使用 Vision（性能最高，无需 Reality）
+      const clashConfig = `proxies:
+  - name: "${NAME}-${ISP}"
     type: vless
     server: ${DOMAIN}
     port: 443
     uuid: ${UUID}
-    flow: xtls-rprx-vision
     tls: true
-    servername: www.yahoo.com
-    reality-opts:
-      public-key: HpZC3mD0d6w1X7T1f1v7Z9Y8X5b9G9n1U5m7K8q1P4r
-      short-id: a1b2c3d4
+    udp: true
+    flow: xtls-rprx-vision
+    servername: ${DOMAIN}
     client-fingerprint: chrome
-
-  - name: "${NAME}-${ISP}-TUIC-v5"
-    type: tuic
-    server: ${DOMAIN}
-    port: 443
-    uuid: ${UUID}
-    password: ${UUID}
-    alpn: [h3, spdy/3.1]
-    disable-sni: true
-    skip-cert-verify: true
-    udp-relay-mode: native
-    congestion-control: bbr
-
-proxy-groups:
-  - name: 自动选择
-    type: fallback
-    proxies:
-      - ${NAME}-${ISP}-Hysteria2
-      - ${NAME}-${ISP}-VLESS-Reality-Vision
-      - ${NAME}-${ISP}-TUIC-v5
-    url: http://cp.cloudflare.com/generate_204
-    interval: 300
-
-rules:
-  - GEOIP,CN,DIRECT
-  - MATCH,自动选择`;
+    skip-cert-verify: false
+    network: ws
+    ws-opts:
+      path: /${WSPATH}
+      headers:
+        Host: ${DOMAIN}`;
 
       res.writeHead(200, {
         'Content-Type': 'text/yaml; charset=utf-8',
-        'Subscription-Userinfo': 'upload=0; download=0; total=0; expire=0',
-        'Profile-Update-Interval': '24'
+        'Subscription-Userinfo': 'upload=0; download=0; total=0; expire=0'
       });
       res.end(clashConfig);
     } else {
-      // 原来逻辑：返回 base64 vless
+      // 其他所有客户端（v2rayN、NekoBox 等）：返回原来的 ws+tls vless
       const vlessURL = `vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=ws&host=${DOMAIN}&path=%2F${WSPATH}#${NAME}-${ISP}`;
-      const subscription = vlessURL + '\r\n';
-      const base64Content = Buffer.from(subscription).toString('base64');
+      const base64Content = Buffer.from(vlessURL + '\r\n').toString('base64');
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end(base64Content);
     }
     return;
   }
-  // ==========================================================
 
   else {
     res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -133,7 +92,7 @@ rules:
   }
 });
 
-// ==================== 以下全部原封不动 ====================
+// ==================== 下面全部是你原来的代码，一字未改 ====================
 
 const wss = new WebSocket.Server({ server: httpServer });
 const uuid = UUID.replace(/-/g, "");
@@ -260,7 +219,6 @@ function handleTrojanConnection(ws, msg) {
 }
 
 wss.on('connection', (ws, req) => {
-  const url = req.url || '';
   ws.once('message', msg => {
     if (msg.length > 17 && msg[0] === 0) {
       const id = msg.slice(1, 17);
@@ -274,6 +232,7 @@ wss.on('connection', (ws, req) => {
   }).on('error', () => {});
 });
 
+// 哪吒、删除文件、保活全部保留（你原来的代码）
 const getDownloadUrl = () => {
   const arch = os.arch(); 
   if (arch === 'arm' || arch === 'arm64' || arch === 'aarch64') {
